@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>ASTRA FRONTIER — 3D Combat Demo</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#02050b;color:#fff;font-family:Arial,sans-serif}
+canvas{display:block}
+#hud{position:fixed;inset:0;pointer-events:none}
+.top{display:flex;justify-content:space-between;padding:14px 16px;font-weight:700;text-shadow:0 2px 8px #000}
+#health{color:#70ff9b} #ammo{color:#78b9ff}
+#cross{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:28px;color:#bfe7ff;text-shadow:0 0 12px #39aaff}
+#msg{position:absolute;left:50%;top:12%;transform:translateX(-50%);text-align:center;font-size:22px;font-weight:700}
+#controls{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);opacity:.72;font-size:12px;text-align:center}
+#start{position:fixed;inset:0;background:radial-gradient(circle,#102744,#02050b 70%);display:flex;align-items:center;justify-content:center;z-index:5}
+.card{max-width:420px;margin:20px;padding:28px;border:1px solid #347bb0;border-radius:20px;background:rgba(4,12,25,.9);box-shadow:0 0 50px #064c7a;text-align:center}
+button{border:0;border-radius:12px;padding:14px 28px;background:#1597ff;color:white;font-size:17px;font-weight:700}
+small{opacity:.7;line-height:1.6}
+</style>
+</head>
+<body>
+<div id="start"><div class="card">
+<h1>ASTRA FRONTIER</h1>
+<p>3D SCI-FI COMBAT — PLAYABLE DEMO</p>
+<p><small>Desktop: WASD to move • Mouse to aim • Click to fire<br>
+Mobile: use the on-screen touch controls and tap the fire area.</small></p>
+<button id="play">ENTER MISSION</button>
+</div></div>
+<div id="hud">
+<div class="top"><span>HP <b id="health">100</b></span><span>WAVE <b id="wave">1</b></span><span>AMMO <b id="ammo">30</b></span></div>
+<div id="cross">+</div><div id="msg"></div>
+<div id="controls">WASD / TOUCH • AIM • FIRE</div>
+</div>
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x02050b);
+scene.fog=new THREE.FogExp2(0x02050b,0.018);
+const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.1,1000);
+camera.position.set(0,3,8);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0x8cc8ff,0x11111a,1.5));
+const sun=new THREE.DirectionalLight(0xffffff,2);
+sun.position.set(5,10,4); scene.add(sun);
+
+const floor=new THREE.Mesh(
+ new THREE.PlaneGeometry(140,140),
+ new THREE.MeshStandardMaterial({color:0x101823,roughness:.85,metalness:.2})
+);
+floor.rotation.x=-Math.PI/2; scene.add(floor);
+
+const grid=new THREE.GridHelper(140,70,0x1d5572,0x153044);
+grid.position.y=.01; scene.add(grid);
+
+for(let i=0;i<45;i++){
+ const h=THREE.MathUtils.randFloat(2,12);
+ const m=new THREE.Mesh(new THREE.BoxGeometry(
+   THREE.MathUtils.randFloat(1,4),h,THREE.MathUtils.randFloat(1,4)),
+   new THREE.MeshStandardMaterial({color:0x182333,metalness:.7,roughness:.35})
+ );
+ m.position.set(THREE.MathUtils.randFloatSpread(70),h/2,THREE.MathUtils.randFloatSpread(70));
+ scene.add(m);
+}
+
+const player=new THREE.Group();
+const body=new THREE.Mesh(new THREE.CapsuleGeometry(.55,1.2,5,12),
+ new THREE.MeshStandardMaterial({color:0x2b9cff,metalness:.8,roughness:.25,emissive:0x06203a}));
+body.position.y=1.15; player.add(body);
+scene.add(player);
+
+let hp=100,ammo=30,wave=1,kills=0;
+const enemies=[],shots=[];
+const keys={}; let running=false,fireCooldown=0;
+let yaw=0,pitch=-.12;
+
+function spawnEnemy(){
+ const e=new THREE.Group();
+ const b=new THREE.Mesh(new THREE.SphereGeometry(.65,16,12),
+  new THREE.MeshStandardMaterial({color:0xff315f,metalness:.5,roughness:.3,emissive:0x350012}));
+ b.position.y=.75;e.add(b);
+ const ring=new THREE.Mesh(new THREE.TorusGeometry(.78,.06,8,24),
+  new THREE.MeshBasicMaterial({color:0xff456e}));
+ ring.rotation.x=Math.PI/2;ring.position.y=.75;e.add(ring);
+ const a=Math.random()*Math.PI*2,d=THREE.MathUtils.randFloat(18,32);
+ e.position.set(player.position.x+Math.cos(a)*d,0,player.position.z+Math.sin(a)*d);
+ e.userData.hp=3+wave; e.userData.speed=.9+wave*.08;
+ scene.add(e); enemies.push(e);
+}
+function newWave(){
+ wave++; document.getElementById("wave").textContent=wave;
+ for(let i=0;i<Math.min(3+wave,10);i++)spawnEnemy();
+}
+for(let i=0;i<4;i++)spawnEnemy();
+
+function shoot(){
+ if(!running||ammo<=0||fireCooldown>0)return;
+ ammo--;fireCooldown=.16;
+ document.getElementById("ammo").textContent=ammo;
+ const dir=new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(pitch,yaw,0,"YXZ"));
+ const s=new THREE.Mesh(new THREE.SphereGeometry(.07,8,8),
+  new THREE.MeshBasicMaterial({color:0x7bd7ff}));
+ s.position.copy(camera.position);s.userData.vel=dir.multiplyScalar(42);
+ scene.add(s);shots.push(s);
+ if(ammo===0)setTimeout(()=>{ammo=30;document.getElementById("ammo").textContent=ammo},900);
+}
+
+function damage(){
+ hp-=8;document.getElementById("health").textContent=Math.max(0,hp);
+ if(hp<=0){running=false;document.getElementById("msg").textContent="MISSION FAILED — RELOAD TO RETRY";}
+}
+
+function reset(){
+ location.reload();
+}
+
+window.addEventListener("keydown",e=>{keys[e.key.toLowerCase()]=true;if(e.code==="Space")shoot()});
+window.addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+window.addEventListener("mousedown",e=>{if(e.button===0)shoot()});
+window.addEventListener("mousemove",e=>{
+ if(document.pointerLockElement===renderer.domElement){
+   yaw-=e.movementX*.0025; pitch-=e.movementY*.0025;
+   pitch=Math.max(-1.1,Math.min(.65,pitch));
+ }
+});
+renderer.domElement.addEventListener("click",()=>renderer.domElement.requestPointerLock?.());
+
+let touchStart=null;
+renderer.domElement.addEventListener("touchstart",e=>{
+ const t=e.touches[0];touchStart={x:t.clientX,y:t.clientY};
+ if(t.clientX>innerWidth*.65)shoot();
+},{passive:true});
+renderer.domElement.addEventListener("touchmove",e=>{
+ if(!touchStart)return;
+ const t=e.touches[0],dx=t.clientX-touchStart.x,dy=t.clientY-touchStart.y;
+ if(t.clientX<innerWidth*.6){
+   keys.w=dy<-25;keys.s=dy>25;keys.a=dx<-25;keys.d=dx>25;
+ }else{
+   yaw-=dx*.0015;pitch-=dy*.0015;
+ }
+ touchStart={x:t.clientX,y:t.clientY};
+},{passive:true});
+renderer.domElement.addEventListener("touchend",()=>{keys.w=keys.s=keys.a=keys.d=false;touchStart=null});
+
+function update(dt){
+ if(!running)return;
+ fireCooldown=Math.max(0,fireCooldown-dt);
+ const speed=7;
+ const forward=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw));
+ const right=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));
+ if(keys.w)player.position.addScaledVector(forward,speed*dt);
+ if(keys.s)player.position.addScaledVector(forward,-speed*dt);
+ if(keys.a)player.position.addScaledVector(right,-speed*dt);
+ if(keys.d)player.position.addScaledVector(right,speed*dt);
+
+ player.rotation.y=yaw;
+ camera.position.lerp(new THREE.Vector3(player.position.x,player.position.y+3.1,player.position.z+7.2),.18);
+ camera.rotation.set(pitch,yaw,0,"YXZ");
+
+ for(let i=shots.length-1;i>=0;i--){
+   const s=shots[i];s.position.addScaledVector(s.userData.vel,dt);
+   if(s.position.distanceTo(player.position)>70){scene.remove(s);shots.splice(i,1);continue}
+   for(let j=enemies.length-1;j>=0;j--){
+     const e=enemies[j];
+     if(s.position.distanceTo(e.position.clone().add(new THREE.Vector3(0,.75,0)))<1){
+       e.userData.hp--;scene.remove(s);shots.splice(i,1);
+       if(e.userData.hp<=0){scene.remove(e);enemies.splice(j,1);kills++;}
+       break;
+     }
+   }
+ }
+ for(const e of enemies){
+   const target=player.position.clone();target.y=0;
+   const v=target.sub(e.position);v.y=0;
+   const d=v.length();
+   if(d>1.5){v.normalize();e.position.addScaledVector(v,e.userData.speed*dt)}
+   else damage();
+ }
+ if(enemies.length===0)newWave();
+}
+let last=performance.now();
+function loop(now){const dt=Math.min(.05,(now-last)/1000);last=now;update(dt);renderer.render(scene,camera);requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+
+document.getElementById("play").onclick=()=>{
+ document.getElementById("start").style.display="none";running=true;
+ renderer.domElement.requestPointerLock?.();
+};
+
+addEventListener("resize",()=>{
+ camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
